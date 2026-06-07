@@ -1,166 +1,64 @@
-> [!IMPORTANT]
-> ## This repo is archived — now part of `databricks-code-practice`
->
-> All hands-on Databricks labs now live in one unified repo: **[jrlasak/databricks-code-practice](https://github.com/jrlasak/databricks-code-practice)**.
->
-> **This lab's new home:** https://github.com/jrlasak/databricks-code-practice/tree/main/pipeline-labs/apparel-streaming
->
-> Clone the new repo: `git clone https://github.com/jrlasak/databricks-code-practice`
->
-> The content below still works and is preserved for anyone with existing clones or links, but future updates land only in the new unified repo.
+# Databricks DLT → ClickZetta Lakehouse Migration
 
----
+[![Original](https://img.shields.io/badge/Original-jrlasak/databricks__apparel__streaming-⭐45-blue)](https://github.com/jrlasak/databricks_apparel_streaming)
 
-# Databricks DLT Apparel Pipeline: A Learning Project
+Migrate a complete **Databricks Delta Live Tables (DLT)** pipeline (Bronze/Silver/Gold, SCD Type 2, data quality expectations) to **ClickZetta Lakehouse SQL** — no streaming engine, just SQL.
 
-> Independent educational resource; not endorsed by Databricks, Inc. "Databricks" and "Delta Lake" are trademarks of their respective owners.
+## Quick Start
 
-## Author
+```bash
+cp .env.example .env   # fill credentials
+python3 setup.py       # schemas + volume + data + bronze + silver + gold
+python3 e2e.py         # 16/16 assertions ✅
+```
 
-<img src="https://dataengineer.wiki/download/profilepicture.jpg" alt="Jakub Lasak" width="80" style="border-radius: 50%;" />
+## Project Structure
 
-**Jakub Lasak** — Helping you interview like seniors, execute like seniors, and think like seniors.
+```
+├── 01_source/dlt/         ← Original Databricks DLT Python files (preserved)
+│   ├── 01_bronze.py       #   @dlt.table — Auto Loader streaming ingestion
+│   ├── 02A_silver.py      #   @dlt.view + @dlt.expect_or_drop — cleansed streams
+│   ├── 02B_silver.py      #   dlt.create_auto_cdc_flow — SCD Type 2
+│   ├── 02C/02D_silver.py  #   sales + returns cleaning
+│   ├── 03_gold.py         #   @dlt.table — denormalized facts + aggregates
+│   ├── data_generator.py  #   synthetic data generator
+│   └── variables.py       #   catalog/schema/path constants
+├── 02_migration/          ← Migration notes & DLT → SQL mapping table
+├── 03_lakehouse/sql/      ← Migrated SQL (4 files)
+│   ├── 01_setup.sql       #   CREATE SCHEMA + CREATE VOLUME
+│   ├── 02_bronze.sql      #   COPY INTO from Volume
+│   ├── 03_silver.sql      #   SCD2 + cleaning + current views
+│   └── 04_gold.sql        #   denormalized facts + aggregations
+├── data/                  ← Seed CSV files (4 files)
+├── setup.py               ← One-click: schemas + upload + bronze + silver + gold
+└── e2e.py                 ← 16 automated checks
+```
 
-- 🔗 [LinkedIn](https://www.linkedin.com/in/jrlasak/) - Databricks projects and tips
-- 📬 [Substack Newsletter](https://dataengineer.wiki/substack) - Exclusive content for Data Engineers
-- 🌐 [DataEngineer.wiki](http://dataengineer.wiki/) - Training materials and resources
-- 🚀 [More Practice Labs](https://dataengineer.wiki/projects) - Delta Live Tables, table optimization, and more
+## DLT → SQL Mapping
 
-## 1. Context and Goal
+| DLT (Databricks) | Lakehouse SQL | Notes |
+|---|---|---|
+| `@dlt.table(name=X)` | `CREATE OR REPLACE TABLE X AS SELECT ...` | Direct equivalent |
+| `@dlt.view(name=X)` | `CREATE OR REPLACE VIEW X AS SELECT ...` | Direct equivalent |
+| `@dlt.expect_or_drop("msg","cond")` | `WHERE condition` | Filter in SQL |
+| `dlt.create_auto_cdc_flow(scd_type=2)` | `LEAD() OVER (PARTITION BY key ORDER BY seq)` | Manual SCD2 |
+| `F.window("event_time","1 day")` | `DATE_TRUNC('day', event_time)` | Standard SQL |
+| Auto Loader (cloudFiles) | `COPY INTO FROM VOLUME` | Batch |
+| `/Volumes/catalog/schema/vol/` | `vol://schema.vol/` | Path format |
 
-Welcome to the Apparel Retail 360 project! In today's data-driven world, retail companies rely on timely and accurate data to understand customer behavior, manage inventory, and optimize sales strategies. The goal of this project is to build a robust, multi-layered data processing pipeline that simulates this real-world challenge.
+## Verified (AWS Singapore)
 
-You will take on the role of a Data Engineer tasked with building an end-to-end analytics platform. Using Delta Live Tables, you will ingest raw data, progressively clean and transform it through a medallion architecture (Bronze, Silver, and Gold layers), and ultimately produce curated datasets ready for business intelligence and reporting.
+| Check | Result |
+|---|---|
+| Bronze (4 tables) | 150 customers / 50 products / 5 stores / 500 sales |
+| Silver SCD2 | 150 all rows / 120 current (30 historical) |
+| Gold facts | 500 rows, $281,490 total revenue |
+| Gold daily | 367 day×store combinations |
+| Gold products | 50 products ranked by revenue |
+| Gold CLV | 96 customers with purchases |
+| **e2e** | **16/16 passed ✅** |
 
-Feel free to reach out to me if you have any questions. My contact details are available on dataengineer.wiki.
+## Related
 
-## 2. By completing this project, you will gain hands-on experience with:
-
-- Ingesting and processing continuous data streams.
-- Applying and managing data quality expectations.
-- Implementing a medallion architecture in DLT.
-- Handling historical data changes using Slowly Changing Dimensions (SCD Type 2).
-- Creating business-ready, aggregated tables for analytics.
-
-## 3. Architecture
-
-- Databricks Free Edition
-- Synthetic streaming data (generated by `dlt/data_generator.py`)
-  - It imitates real world data
-  - It generates 4 tables (a fact sales table, and 3 lookup tables - stores, customers, products)
-- DLT pipeline
-  - You'll create a DLT pipeline to ingest, clean and aggregate raw data.
-  - The pipeline is organized into layers:
-    - **Bronze layer** (`dlt/01_bronze.py`) - Raw data ingestion
-    - **Silver layer** (`dlt/02A_silver.py`, `dlt/02B_silver.py`, `dlt/02C_silver.py`, `dlt/02D_silver.py`) - Cleaned and transformed data
-    - **Gold layer** (`dlt/03_gold.py`) - Business-ready aggregations
-  - At the end, your pipeline will look like this
-    ![](sources/DLT.png)
-
-## 4. Prerequisites
-
-- Intermediate Python (or SQL, if you prefer). The project focuses on using Python for the DLT pipeline.
-- Intermediate Databricks knowledge. While you may be able to complete this project with junior-level experience, it may be more difficult to follow the tasks independently. If you need help, feel free to copy code snippets from the solution file (`final_code/final_dlt.py`) to run and observe the DLT pipeline.
-
-## 5. How to Start
-
-1. **Create a Databricks Account**
-   - Sign up for a [Databricks Free Edition account](https://www.databricks.com/learn/free-edition) if you don't already have one.
-   - Familiarize yourself with the workspace, clusters, and notebook interface.
-
-2. **Import this repository to Databricks**
-   - In Databricks, go to the Workspace sidebar and click the "Repos" section, click "Add Repo".
-     - Alternatively, go to your personal folder, click "create" and select "git folder".
-   - Paste the GitHub URL for this repository.
-   - Authenticate with GitHub if prompted, and select the main branch.
-   - The repo will appear as a folder in your workspace, allowing you to edit, run notebooks, and manage files directly from Databricks.
-   - For more details, see the official Databricks documentation: [Repos in Databricks](https://docs.databricks.com/repos/index.html).
-
-3. Open the `dlt/` folder and run `environment_setup.ipynb` to set up Unity Catalog (catalogs, schemas, volumes).
-4. Read [ProjectPlan.md](ProjectPlan.md) for the full step-by-step guide and task checklist.
-
-## 6. Project Structure
-
-The project is organized as follows:
-
-### `dlt/` folder - Main working directory
-
-This folder contains everything you need to complete the lab:
-
-- **Environment Setup:**
-
-  - `environment_setup.ipynb` - Notebook to set up Unity Catalog (catalogs, schemas, volumes)
-  - `environment_maintenance.ipynb` - Maintenance utilities for the environment
-  - `variables.py` - Configuration file for catalog names, paths, and other settings
-
-- **Data Generation:**
-
-  - `data_generator.py` - Synthetic data generator that creates realistic streaming data
-
-- **DLT Pipeline Files (Your Tasks):**
-
-  - `01_bronze.py` - Bronze layer: Raw data ingestion from source files
-  - `02A_silver.py` - Silver layer: Sales data cleaning and transformation
-  - `02B_silver.py` - Silver layer: Customer dimension with SCD Type 2
-  - `02C_silver.py` - Silver layer: Product dimension with SCD Type 2
-  - `02D_silver.py` - Silver layer: Store dimension with SCD Type 2
-  - `03_gold.py` - Gold layer: Business-ready aggregations and analytics
-
-  **Note:** Each file contains tasks with requirements and a "Solution Is Below" section for reference.
-
-### `final_code/` folder - Reference materials
-
-- `final_dlt.py` - Complete solution for the entire pipeline when you need a full reference
-
-**Learning Tip:** Each task file (`dlt/0*.py`) includes solution code in a "Solution Is Below" section. Try solving tasks yourself first, then check the solution if needed!
-
-### Documentation
-
-- `README.md` - This file, provides project overview
-- `ProjectPlan.md` - Step-by-step instructions and tasks
-- `SynteticDataGenerator.md` - Details about the data generator and schemas
-
----
-
-## Appendix: How This Project Prepares You for the Databricks Data Engineer Associate Certification
-
-This hands-on project is designed to closely mirror the real-world skills and knowledge areas assessed in the Databricks Certified Data Engineer Associate exam. By completing this project, you will gain practical experience with the Databricks Data Intelligence Platform, Delta Live Tables (DLT), and the medallion architecture, all of which are core to the certification exam. Here’s how the project aligns with the exam outline:
-
-**Section 1: Databricks Intelligence Platform**
-
-- You will work directly in the Databricks workspace, learning to manage data layout, optimize query performance, and select appropriate compute resources for streaming and batch workloads.
-- The project demonstrates the value of the Data Intelligence Platform by showing how it simplifies ETL, governance, and analytics.
-
-**Section 2: Development and Ingestion**
-
-- You will use Notebooks and Python scripts to develop and orchestrate data pipelines, similar to real Databricks workflows.
-- The project’s raw data ingestion leverages Delta Lake and streaming, exposing you to Auto Loader-like patterns and troubleshooting data ingestion issues.
-
-**Section 3: Data Processing & Transformations**
-
-- The pipeline implements the three layers of the Medallion Architecture (Bronze, Silver, Gold), giving you hands-on experience with their purposes and best practices.
-- You will use DLT to build ETL pipelines, apply data quality expectations, and perform complex aggregations with PySpark DataFrames.
-- The project covers DDL/DML operations and demonstrates how to manage schema evolution and data transformations.
-
-**Section 4: Productionizing Data Pipelines**
-
-- You will learn about deploying and orchestrating pipelines, handling failures, and rerunning tasks, which are key for production workflows.
-- The project encourages you to analyze Spark UI and optimize queries for performance.
-- You will see the difference between serverless and cluster-based compute, and understand Databricks Asset Bundles (DAB) concepts through pipeline configuration.
-
-**Section 5: Data Governance & Quality**
-
-- The project uses Unity Catalog concepts (catalogs, schemas, volumes) and demonstrates the difference between managed and external tables.
-- You will practice setting up permissions, understanding roles, and using data lineage features.
-- The pipeline’s data quality checks and expectations prepare you for questions on governance, audit logging, and Delta Sharing.
-
-**Recommended Preparation**
-
-- This project complements Databricks Academy’s self-paced and instructor-led courses, providing the hands-on experience recommended for the exam.
-- By following the project plan and checklist, you will cover all major exam topics, from ingestion to governance.
-
-**Exam Details**
-
-- 45 multiple-choice questions, 90 minutes, online proctored.
-- No prerequisites, but hands-on experience (like this project) is highly recommended.
-- For the latest exam guide and recommended training, visit the official Databricks certification page.
+- [Databricks → 云器 Lakehouse 迁移评估系列](https://github.com/clickzetta/Databricks-vs-Lakehouse)
+- Original: [jrlasak/databricks_apparel_streaming](https://github.com/jrlasak/databricks_apparel_streaming) ⭐45
