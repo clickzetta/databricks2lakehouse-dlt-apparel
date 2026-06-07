@@ -1,33 +1,51 @@
-# Migration Notes: Databricks DLT → Lakehouse SQL
+# Migration Notes: Databricks DLT → ZettaPark (Minimal Change)
 
-## Changes Summary
+## Migration Strategy
 
-| DLT (Databricks) | Lakehouse SQL | Notes |
+Minimal change: keep Python DataFrame API, replace only DLT-specific decorators and APIs.
+Each original DLT file maps 1:1 to a ZettaPark file in 03_lakehouse/.
+
+## File Mapping
+
+| 01_source/dlt/ | 03_lakehouse/ | Change |
 |---|---|---|
-| `@dlt.table(name=X)` | `CREATE OR REPLACE TABLE X AS SELECT ...` | Direct equivalent |
-| `@dlt.view(name=X)` | `CREATE OR REPLACE VIEW X AS SELECT ...` | Direct equivalent |
-| `@dlt.expect_or_drop("msg","cond")` | `WHERE condition` | Filter in SQL |
-| `@dlt.expect("msg","cond")` | Comment only (warn-level) | Not enforced in SQL |
-| `dlt.read_stream("LIVE.X")` | `FROM schema.X` | DT handles incremental automatically |
-| `dlt.read("LIVE.X")` | `FROM schema.X` | Same |
-| `dlt.create_auto_cdc_flow(scd_type=2)` | `LEAD() OVER (PARTITION BY key ORDER BY seq)` | Manual SCD2 with window function |
-| `F.window("event_time","1 day")` | `DATE_TRUNC('day', event_time)` | Standard SQL |
-| `/Volumes/catalog/schema/vol/` | `vol://schema.vol/` | Path format only |
-| Auto Loader (cloudFiles) | `COPY INTO FROM VOLUME` | Batch; use Pipe for streaming |
+| `01_bronze.py` | `01_bronze.py` | Auto Loader → `session.read.csv("vol://")` |
+| `02A_silver.py` | _(inline in 02B)_ | `@dlt.expect_or_drop` → `df.filter()` |
+| `02B_silver.py` | `02B_silver.py` | `create_auto_cdc_flow(scd=2)` → `LEAD() OVER Window` |
+| `02C_silver.py` | `02C_silver.py` | `@dlt.expect_or_drop` → `df.filter()` |
+| `03_gold.py` | `03_gold.py` | `F.window("1 day")` → `F.to_date()` |
+| `variables.py` | `includes/configuration.py` | Schema/path constants |
 
-## What Stayed the Same
+## DLT → ZettaPark Changes
 
-- All JOIN logic (LEFT JOIN dimension snapshots)
-- All aggregation functions (SUM, COUNT, AVG, MIN, MAX)
-- All GROUP BY / ORDER BY logic
-- Column aliases and expressions
-- Data quality filters (moved from `@dlt.expect` to `WHERE`)
+| DLT API | ZettaPark | Notes |
+|---|---|---|
+| `import dlt` | _(removed)_ | No DLT in ZettaPark |
+| `from pyspark.sql import functions as F` | `from clickzetta.zettapark import functions as F` | Package name only |
+| `from pyspark.sql.window import Window` | `from clickzetta.zettapark.window import Window` | Package name only |
+| `spark` (global) | `session = Session.builder.configs({}).create()` | Explicit session |
+| `@dlt.table(name=X)` | `df.write.mode("overwrite").saveAsTable(X)` | Decorator → last line |
+| `@dlt.view(name=X) + @dlt.expect_or_drop("msg","cond")` | `df = df.filter(condition)` | Inline filter |
+| `dlt.read_stream("LIVE.X")` / `dlt.read("LIVE.X")` | `session.table("X")` | Same as PySpark |
+| `dlt.create_auto_cdc_flow(scd_type=2)` | `df.withColumn("__end_at", F.lead(seq).over(Window.partitionBy(key).orderBy(seq)))` | Standard window |
+| `F.window("event_time","1 day")` | `F.to_date(F.col("event_time"))` | F.window not in ZettaPark |
+| `/Volumes/catalog/schema/vol/` | `vol://schema.vol/` | Path format |
+
+## Completely Unchanged
+
+All DataFrame operations are identical between PySpark and ZettaPark:
+- `.filter()`, `.select()`, `.join()`, `.groupBy()`, `.agg()`
+- `F.col()`, `F.lit()`, `F.when()`, `F.coalesce()`, `F.sum()`, etc.
+- `F.lead()`, `F.lag()`, `F.row_number()` via `Window`
+- `F.to_date()`, `F.current_date()`, `F.round()`, `F.count()`, `F.countDistinct()`
+- `.withColumn()`, `.withColumnRenamed()`, `.alias()`
 
 ## Verified (AWS Singapore de1cbb4a)
 
-| Layer | Tables | Rows |
-|---|---|---|
-| Bronze | 4 | 705 total (150+50+5+500) |
-| Silver | 4 tables + 3 views | SCD2 correct (150 all/120 current) |
-| Gold | 4 | 500 facts, 50 products, 96 customers, 367 daily |
-| Total revenue | — | 281,490 |
+```
+01_bronze.py:   4 tables (150+50+5+500 rows)
+02B_silver.py:  SCD2 correct (150 all / 120 current / 30 history)
+02C_silver.py:  500 sales transactions
+03_gold.py:     500 facts / 367 daily / 50 products / 96 customers
+e2e.py:         16/16 passed ✅
+```
