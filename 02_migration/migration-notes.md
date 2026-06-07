@@ -67,3 +67,26 @@ cz-cli sql --file 03_lakehouse/sql/03_gold.sql   --profile aws_singapore_prod --
 
 **When to use SQL**: team is SQL-first, no Python runtime needed, quick ad-hoc testing.  
 **When to use ZettaPark**: existing PySpark skills, want to reuse Python code, need UDFs or complex logic.
+
+## Pipe (Auto Loader equivalent) — Verified ✅
+
+Pipe was successfully tested with external S3 Volume:
+- Created external Volume connected to S3 (`s3://qiliang-udf-code/apparel_landing/`)
+- Created Pipe with `INGEST_MODE = 'LIST_PURGE'`
+- Uploaded new CSV to S3 → Pipe auto-detected and ingested within 15 seconds
+
+Key difference from internal Volume:
+- **External Volume** (S3/OSS/COS): required for Pipe
+- **Internal Volume**: supports COPY INTO but NOT Pipe
+
+Requirement: explicit table schema (no `inferSchema` with external Volume).
+
+```sql
+CREATE PIPE apparel_bronze.pipe_sales
+    VIRTUAL_CLUSTER = 'DEFAULT'
+    INGEST_MODE = 'LIST_PURGE'
+AS COPY INTO apparel_bronze.raw_sales
+FROM VOLUME apparel_bronze.s3_sales_landing  -- external S3 Volume
+USING CSV OPTIONS ('header'='true')
+PURGE = TRUE ON_ERROR = CONTINUE;
+```
