@@ -2,62 +2,80 @@
 
 [![Original](https://img.shields.io/badge/Original-jrlasak/databricks__apparel__streaming-⭐45-blue)](https://github.com/jrlasak/databricks_apparel_streaming)
 
-Migrate a complete **Databricks Delta Live Tables (DLT)** pipeline (Bronze/Silver/Gold, SCD Type 2, data quality expectations) to **ClickZetta Lakehouse SQL** — no streaming engine, just SQL.
+Migrate a complete **Databricks Delta Live Tables (DLT)** pipeline to **ClickZetta Lakehouse** in three paths. Verified 20/20 on AWS Singapore.
 
 ## Quick Start
 
 ```bash
 cp .env.example .env   # fill credentials
-python3 setup.py       # schemas + volume + data + bronze + silver + gold
-python3 e2e.py         # 16/16 assertions ✅
+python3 setup.py       # schemas + volume + data upload + bronze + silver + gold
+python3 e2e.py         # 20/20 ✅
 ```
 
-## Project Structure
+## Three Migration Paths
 
+| Path | Files | Session | Orchestration | DLT equivalent |
+|---|---|---|---|---|
+| **A. ZettaPark** | `03_lakehouse/*.py` | `Session.builder.create()` | `setup.py` | `@dlt.table` → `df.write.saveAsTable()` |
+| **B. Pure SQL** | `03_lakehouse/sql/` | None | `cz-cli sql --file` | SQL equivalents |
+| **C. Dynamic Table** | `03_lakehouse/dynamic_tables/` | None | `REFRESH DYNAMIC TABLE` | **@dlt.table native equivalent** |
+
+**Path C is the closest to DLT**: Dynamic Tables auto-refresh on schedule, just like DLT pipelines refresh on new data. Define the SQL once, Lakehouse handles incremental updates.
+
+## DLT → Dynamic Table Mapping (Path C)
+
+```sql
+-- DLT (@dlt.table):
+@dlt.table(name="gold_daily_sales_by_store")
+def gold_daily_sales_by_store():
+    return df.groupBy(F.window("event_time","1 day"), ...).agg(...)
+
+-- Dynamic Table (Lakehouse):
+CREATE OR REPLACE DYNAMIC TABLE apparel_gold.dt_daily_sales_by_store
+REFRESH INTERVAL 10 MINUTE
+VCLUSTER DEFAULT
+AS
+SELECT CAST(event_time AS DATE) AS sale_date, ...
+FROM apparel_gold.denormalized_sales_facts
+GROUP BY CAST(event_time AS DATE), ...;
 ```
-├── 01_source/dlt/         ← Original Databricks DLT Python files (preserved)
-│   ├── 01_bronze.py       #   @dlt.table — Auto Loader streaming ingestion
-│   ├── 02A_silver.py      #   @dlt.view + @dlt.expect_or_drop — cleansed streams
-│   ├── 02B_silver.py      #   dlt.create_auto_cdc_flow — SCD Type 2
-│   ├── 02C/02D_silver.py  #   sales + returns cleaning
-│   ├── 03_gold.py         #   @dlt.table — denormalized facts + aggregates
-│   ├── data_generator.py  #   synthetic data generator
-│   └── variables.py       #   catalog/schema/path constants
-├── 02_migration/          ← Migration notes & DLT → SQL mapping table
-├── 03_lakehouse/sql/      ← Migrated SQL (4 files)
-│   ├── 01_setup.sql       #   CREATE SCHEMA + CREATE VOLUME
-│   ├── 02_bronze.sql      #   COPY INTO from Volume
-│   ├── 03_silver.sql      #   SCD2 + cleaning + current views
-│   └── 04_gold.sql        #   denormalized facts + aggregations
-├── data/                  ← Seed CSV files (4 files)
-├── setup.py               ← One-click: schemas + upload + bronze + silver + gold
-└── e2e.py                 ← 16 automated checks
-```
 
-## DLT → SQL Mapping
+## DLT → ZettaPark Mapping (Path A)
 
-| DLT (Databricks) | Lakehouse SQL | Notes |
+| DLT API | ZettaPark | Notes |
 |---|---|---|
-| `@dlt.table(name=X)` | `CREATE OR REPLACE TABLE X AS SELECT ...` | Direct equivalent |
-| `@dlt.view(name=X)` | `CREATE OR REPLACE VIEW X AS SELECT ...` | Direct equivalent |
-| `@dlt.expect_or_drop("msg","cond")` | `WHERE condition` | Filter in SQL |
-| `dlt.create_auto_cdc_flow(scd_type=2)` | `LEAD() OVER (PARTITION BY key ORDER BY seq)` | Manual SCD2 |
-| `F.window("event_time","1 day")` | `DATE_TRUNC('day', event_time)` | Standard SQL |
-| Auto Loader (cloudFiles) | `COPY INTO FROM VOLUME` | Batch |
-| `/Volumes/catalog/schema/vol/` | `vol://schema.vol/` | Path format |
+| `@dlt.table(name=X)` | `df.write.mode("overwrite").saveAsTable(X)` | Last line |
+| `@dlt.expect_or_drop("msg","cond")` | `df.filter(condition)` | Same semantics |
+| `dlt.read_stream/read("LIVE.X")` | `session.table("X")` | Same as PySpark |
+| `create_auto_cdc_flow(scd_type=2)` | `F.lead().over(Window.partitionBy(key).orderBy(seq))` | Window unchanged |
+| `F.window("event_time","1 day")` | `F.to_date(F.col("event_time"))` | F.window not in ZettaPark |
+| `from pyspark.sql...` | `from clickzetta.zettapark...` | Package name |
 
-## Verified (AWS Singapore)
+## About Pipe (Auto Loader equivalent)
 
-| Check | Result |
-|---|---|
-| Bronze (4 tables) | 150 customers / 50 products / 5 stores / 500 sales |
-| Silver SCD2 | 150 all rows / 120 current (30 historical) |
-| Gold facts | 500 rows, $281,490 total revenue |
-| Gold daily | 367 day×store combinations |
-| Gold products | 50 products ranked by revenue |
-| Gold CLV | 96 customers with purchases |
-| **e2e** | **16/16 passed ✅** |
+Pipe = Auto Loader equivalent for continuous file ingestion from object storage (OSS/S3/COS). Requires an external Volume connected to cloud storage. Not tested in this demo (uses internal Volume), but syntax:
+
+```sql
+CREATE PIPE apparel_bronze.pipe_sales
+    VIRTUAL_CLUSTER = 'DEFAULT'
+    INGEST_MODE = 'LIST_PURGE'
+AS COPY INTO apparel_bronze.raw_sales
+FROM VOLUME apparel_bronze.sales_external_landing
+USING CSV OPTIONS ('header'='true') PURGE=TRUE ON_ERROR=CONTINUE;
+```
+
+## Verified (AWS Singapore de1cbb4a)
+
+| | ZettaPark (A) | SQL (B) | Dynamic Table (C) |
+|---|---|---|---|
+| Bronze | ✅ 4 tables | ✅ | — |
+| Silver SCD2 | ✅ 150/120 | ✅ | ✅ `dt_customers_current` |
+| Gold daily | ✅ 367 | ✅ | ✅ `dt_daily_sales_by_store` |
+| Gold products | ✅ 50 | ✅ | ✅ `dt_product_performance` |
+| Gold CLV | ✅ 96 | ✅ | ✅ `dt_customer_lifetime_value` |
+| **e2e** | **20/20 ✅** | — | included in 20/20 |
 
 ## Related
 
+- [Databricks → 云器 Lakehouse 迁移评估系列](https://github.com/clickzetta/Databricks-vs-Lakehouse)
 - Original: [jrlasak/databricks_apparel_streaming](https://github.com/jrlasak/databricks_apparel_streaming) ⭐45

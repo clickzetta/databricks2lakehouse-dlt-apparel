@@ -57,5 +57,26 @@ for label, q, exp in METRICS:
     else: failed += 1
     print(f"{status}  {label}: {act:,}")
 
+
+# ── Dynamic Table checks ──
+DT_EXPECTED = {
+    "apparel_silver.dt_customers_current":       (">=", 100),
+    "apparel_gold.dt_daily_sales_by_store":      (">=", 100),
+    "apparel_gold.dt_product_performance":       50,
+    "apparel_gold.dt_customer_lifetime_value":   96,
+}
+
+print("\n=== Dynamic Tables (GIC) ===")
+for table, exp in DT_EXPECTED.items():
+    act = n(table)
+    if isinstance(exp, tuple):
+        ok = act >= exp[1]
+    else:
+        ok = act == exp
+    status = "\u2705" if ok else f"\u274C EXP={exp}"
+    if ok: passed += 1
+    else: failed += 1
+    print(f"{status}  {table.split('.')[-1]}: {act:,}")
+
 print(f"\n{passed}/{passed+failed} passed", "\u2705" if failed==0 else f"\u274C {failed} FAILED")
 sys.exit(0 if failed == 0 else 1)
