@@ -60,5 +60,4 @@ python3 e2e.py         # 16/16 assertions ✅
 
 ## Related
 
-- [Databricks → 云器 Lakehouse 迁移评估系列](https://github.com/clickzetta/Databricks-vs-Lakehouse)
 - Original: [jrlasak/databricks_apparel_streaming](https://github.com/jrlasak/databricks_apparel_streaming) ⭐45

@@ -49,3 +49,21 @@ All DataFrame operations are identical between PySpark and ZettaPark:
 03_gold.py:     500 facts / 367 daily / 50 products / 96 customers
 e2e.py:         16/16 passed ✅
 ```
+
+## Alternative: Pure SQL
+
+If your team prefers SQL over Python, `03_lakehouse/sql/` provides equivalent SQL scripts:
+
+```bash
+# Run SQL alternative (cz-cli)
+cz-cli sql --file 03_lakehouse/sql/02_silver.sql --profile aws_singapore_prod --sync --write
+cz-cli sql --file 03_lakehouse/sql/03_gold.sql   --profile aws_singapore_prod --sync --write
+```
+
+| SQL File | Equivalent DLT file | Key SQL pattern |
+|---|---|---|
+| `sql/02_silver.sql` | `02B_silver.py` + `02C_silver.py` | `LEAD() OVER (PARTITION BY key ORDER BY seq)` |
+| `sql/03_gold.sql` | `03_gold.py` | `DATE_TRUNC('day', event_time)` |
+
+**When to use SQL**: team is SQL-first, no Python runtime needed, quick ad-hoc testing.  
+**When to use ZettaPark**: existing PySpark skills, want to reuse Python code, need UDFs or complex logic.
